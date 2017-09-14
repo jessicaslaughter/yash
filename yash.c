@@ -7,98 +7,106 @@
 #include <stdio.h>
 #include <fcntl.h>
 
-pid_t cpid;
+int cpid;
 
 int main(void) {
-	while(1) {
-		char str[2000];	 // MAKE 2001		
-		const char s[2] = " ";
-		char *token;
-		char command[2000];
-		char *arg;
+		while(1) {
+				const int INPUT_SIZE = 2001;
+				char str[INPUT_SIZE];		
+				const char delimeter[2] = " ";
+				char *currentTok;
+				char *prevTok;
+				char *inFile = NULL;
+				char *outFile = NULL;
+				char *errFile = NULL;
+				char *arg;
 
-		/* get and parse command input */
-		fgets(str, 2000, stdin);
-		strtok(str, "\n");
-		token = strtok(str, s);
-		arg = token;
-		strcpy(command, "");
-		int commandParsed = 0;
-		int pipeCommand = 0;
-		int numTokens = 0;
+				int cmdParsed = 0;
+				int numArgs = 0;
 
-		while (token != NULL) {
-			printf("This is the token: %s\n", token);
+				/* get and parse command input */
+				fgets(str, INPUT_SIZE, stdin);
+				strtok(str, "\n");
+				currentTok = strtok(str, delimeter);
+				arg = currentTok;
+				numArgs = 1;
 
-			/* haven't fully parsed the left command */
-			if (!commandParsed && strcmp(token, "<") != 0 && strcmp(token, ">") != 0 && strcmp(token, "2>") != 0 && strcmp(token, "|") != 0) {
-				strcat(command, " ");
-				strcat(command, token);
-				numTokens++;
-			}
-		 	else {
-				commandParsed = 1;
-				if (strcmp(token, "|") == 0) {
-					pipeCommand = 1;
-				}	
-			}
-	
-			// I WORK TILL HERE!!!
-
-			if (commandParsed) {
-				char *fileToken;
-				int in, out;
-
-				// convert command into args for execvp
-				char *args[numTokens + 1];
-				args[0] = strtok(command, s);
-				for (int i = 1; i < numTokens; i++) {
-					args[i] = strtok(NULL, s);
+				while (currentTok != NULL) {
+						printf("This is the token: %s\n", currentTok);
+						prevTok = currentTok;
+						currentTok = strtok(NULL, delimeter);
+						if (strcmp(prevTok, "<") == 0) {
+								// need to replace stdin
+								inFile = currentTok;
+								cmdParsed = 1;
+						}
+						else if (strcmp(prevTok, ">") == 0) {
+								// need to replace stdout
+								outFile = currentTok;
+								cmdParsed = 1;
+						}
+						else if (strcmp(prevTok, "2>") == 0) {
+								// need to replace stdout
+								errFile = currentTok;
+								cmdParsed = 1;
+						}
+						else if (!cmdParsed) {
+								numArgs++;
+						}
 				}
-				args[numTokens] = NULL;
 
-				// do file redirection
-				if (!pipeCommand) {
-					while (token != NULL) {
-						printf("about to fork");
-						cpid = fork();
-						if (cpid == 0) {
-							// child process
-							if (strcmp(token, "<") == 0) {
-								// replace stdin with next token
-								fileToken = strtok(NULL, s);
-								in = open(fileToken, O_RDONLY);
+				printf("num args: %d\n", numArgs);
+				int i = 0;
+				int count = 0;
+				
+				while (str[i] != '\0') {
+						if (str[i] == ' ') {
+								str[i] = '\0';
+						}
+						i++;
+				}
+				printf("inFile: %s\n", inFile);
+				printf("outFile: %s\n", outFile);
+				printf("errFile: %s\n", errFile);
+				
+				char *argv[numArgs];
+				char *ptr = str;
+				for (int i = 0; i < numArgs - 1; i++) {
+						argv[i] = ptr;
+						ptr = ptr + strlen(ptr) + 1;
+				}
+				
+				int in, out, err;
+				if (inFile != NULL) {
+						in = open(inFile, O_RDONLY);
+				}
+			  if (outFile != NULL) {
+						out = open(outFile, O_WRONLY | O_CREAT, S_IWUSR);
+				}
+				if (errFile != NULL) {
+						err = open(errFile, O_WRONLY | O_CREAT, S_IWUSR);
+				}
+				
+				int cpid;
+				cpid = fork();
+				if (cpid == 0) {
+						// child
+						if (inFile != NULL) {
 								dup2(in, STDIN_FILENO);
-								printf("about to execvp");
-								execvp(arg, args);
-							}
-							else if (strcmp(token, ">") == 0) {
-								// replace stdin with next token
-								fileToken = strtok(NULL, s);
-								out = open(fileToken, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IRGRP | S_IWGRP | S_IWUSR);
+								close(*inFile);
+						}		
+						if (outFile != NULL) {
 								dup2(out, STDOUT_FILENO);
-								printf("about to execvp");
-								execvp(arg, args);
-							}
-							else {
-								// replace stderr with the next token
-					  		fileToken = strtok(NULL, s);
-							}
+								close(*outFile);
 						}
-						else {
-							// parent process
+						if (errFile != NULL) {
+								dup2(err, STDERR_FILENO);
+								close(*errFile);
 						}
-						sleep(1);
-						token = strtok(NULL, s);
-					}
+						execvp(argv[0], argv);
 				}
-
-				// do piping 
-				else  {
-			
+				else {
+						// parent
 				}
-			}
-			token = strtok(NULL, s);
 		}
-	}
 }
