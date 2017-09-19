@@ -19,6 +19,8 @@ void doFileRedirection (char *inFile, char *outFile, char *errFile, int in, int 
 
 void doPiping(char str[], int numArgs, int numSecArgs);
 
+void doBackground(char str[], int num);
+
 void defaultExec (char array[], int num);
 
 
@@ -61,6 +63,7 @@ int main(void) {
 				int cmdParsed = 0;
 				int fileRedirect = 0;
 				int piping = 0;
+				int background = 0;
 				
 				/* get and parse command input */
 				printf("# ");
@@ -100,11 +103,14 @@ int main(void) {
 								piping = 1;
 								cmdParsed = 1;
 						}
+						else if (strcmp(prevTok, "&") == 0) {
+								background = 1;
+								cmdParsed = 1;
+						}
 						else if (!cmdParsed) {
 								// command hasn't been parsed
 								numArgs++;
 						}
-
 						if (piping) {
 								numSecArgs++;
 						}
@@ -134,6 +140,11 @@ int main(void) {
 				else if (piping) {
 						doPiping(str, numArgs, numSecArgs);		
 				}
+/*
+				else if (background) {
+						doBackground(str, numArgs);
+				}
+*/
 				else { // default execvp
 						defaultExec(str, numArgs);		
 				}
@@ -216,6 +227,9 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 						if (signal(SIGTSTP, sig_tstp) == SIG_ERR) {
 								printf("signal(SIGTSTP) error");
 						}
+						if (signal(SIGCONT, sig_cont) == SIG_ERR) {
+								printf("signal(SIGCONT) error");
+						}
 						close(pipefd[0]); // close pipe in the parent
 						close(pipefd[1]);
 						int count = 0;
@@ -233,7 +247,7 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 										count++;
 								} else if (WIFSTOPPED(status)) {
 										printf("%d stopped by signal %d\n", pid, WSTOPSIG(status));
-										signal(SIGCONT, sig_cont);
+										return;
 								} else if (WIFCONTINUED(status)) {
 										printf("Continuing %d\n", pid);
 								}
@@ -260,10 +274,15 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 		}
 }
 
+/* place input command in the background */
+void doBackground(char str[], int num) {
+	
+}
+
 /* handle a command that doesn't fit file redirection / pipes / jobs */
 void defaultExec (char array[], int num) {	
-		int pid = fork();
-		if (pid == 0) {
+		int pid_default = fork();
+		if (pid_default == 0) {
 				char *argvdefault[num];
 				createArgv(array, argvdefault, num, 0);
 				execvp(argvdefault[0], argvdefault);
