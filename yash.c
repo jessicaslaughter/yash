@@ -7,9 +7,14 @@
 #include <stdio.h>
 #include <fcntl.h>
 
-int pid_ch1, pid_ch2, status, pid;
-int pipefd[2];
+#define STACK_SIZE 100
 
+pid_t pid_ch1, pid_ch2, pid, pid_shell, pid_current, pid_default;
+int pipefd[2];
+int stack[STACK_SIZE];
+int top = -1;
+int status;
+siginfo_t *infop;
 
 void spaceToNull(char array[]);
 
@@ -21,21 +26,37 @@ void doPiping(char str[], int numArgs, int numSecArgs);
 
 void doBackground(char str[], int num);
 
-void defaultExec (char array[], int num);
+void defaultExec (char array[], int num, int bg);
 
+void foregroundJob();
+
+void backgroundJob();
+
+void waitForJob(int pid);
+
+int isEmpty();
+
+int isFull();
+
+int peek();
+
+int pop();
+
+int push(int data);
 
 static void sig_int(int signo) {
-		printf("Sending signals to group: %d\n", pid_ch1);
 		kill(-pid_ch1, SIGINT);
 }
 
 static void sig_tstp(int signo) {
-		printf("Sending SIGTSTP to group: %d\n", pid_ch1);
 		kill(-pid_ch1, SIGTSTP);
 }
 
+static void sig_tstp2(int signo) {
+		kill(pid_default, SIGTSTP);
+}
+
 static void sig_cont(int signo) {
-		printf("Sending CONT to %d\n", pid);
 		sleep(4);
 		kill(pid, SIGCONT);
 }
@@ -43,6 +64,8 @@ static void sig_cont(int signo) {
 void shellInit() {
 		signal(SIGINT, SIG_IGN);
 		signal(SIGTSTP, SIG_IGN);
+		signal(SIGTTOU, SIG_IGN);
+		pid_shell = getpid();
 }
 
 int main(void) {		
@@ -64,7 +87,9 @@ int main(void) {
 				int fileRedirect = 0;
 				int piping = 0;
 				int background = 0;
-				
+				int fgJob = 0;
+				int bgJob = 0;
+
 				/* get and parse command input */
 				printf("# ");
 				sleep(.2);
@@ -107,6 +132,12 @@ int main(void) {
 								background = 1;
 								cmdParsed = 1;
 						}
+						else if (strcmp(prevTok, "fg") == 0) {
+								fgJob = 1;
+						}
+						else if (strcmp(prevTok, "bg") == 0) {
+								bgJob = 1;
+						}
 						else if (!cmdParsed) {
 								// command hasn't been parsed
 								numArgs++;
@@ -140,13 +171,21 @@ int main(void) {
 				else if (piping) {
 						doPiping(str, numArgs, numSecArgs);		
 				}
-/*
+
 				else if (background) {
 						doBackground(str, numArgs);
 				}
-*/
+				
+				else if (fgJob) {
+						foregroundJob();
+				}
+
+				else if (bgJob) {
+						backgroundJob();
+				}
+
 				else { // default execvp
-						defaultExec(str, numArgs);		
+						defaultExec(str, numArgs, 0);		
 				}
 		}
 }
@@ -216,11 +255,10 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 
 		pid_ch1 = fork();
 		if (pid_ch1 > 0) {
-				printf("child 1 pid: %d\n", pid_ch1);
 				// parent
+				pid_current = pid_ch1;
 				pid_ch2 = fork();
 				if (pid_ch2 > 0) {
-						printf("child 2 pid: %d\n", pid_ch2);
 						if (signal(SIGINT, sig_int) == SIG_ERR) {
 								printf("signal(SIGINT) error");
 						}
@@ -240,16 +278,13 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 										exit(EXIT_FAILURE);
 								}
 								if (WIFEXITED(status)) {
-										printf("child %d exited, status = %d\n", pid, WEXITSTATUS(status));
 										count++;
 								} else if (WIFSIGNALED(status)) {
-										printf("child %d killed by signal %d\n", pid, WTERMSIG(status));
 										count++;
 								} else if (WIFSTOPPED(status)) {
-										printf("%d stopped by signal %d\n", pid, WSTOPSIG(status));
+										push(pid_ch1);
 										return;
 								} else if (WIFCONTINUED(status)) {
-										printf("Continuing %d\n", pid);
 								}
 						}
 						
@@ -276,19 +311,147 @@ void doPiping(char str[], int numArgs, int numSecArgs) {
 
 /* place input command in the background */
 void doBackground(char str[], int num) {
-	
+		int i = 0;
+		while (str[i] != '\0') {
+				if (str[i] == '&') {
+						str[i] = '\0';
+				}
+				i++;
+		}
+		// run this command in the background
+		defaultExec(str, num, 1);
+
 }
 
 /* handle a command that doesn't fit file redirection / pipes / jobs */
-void defaultExec (char array[], int num) {	
-		int pid_default = fork();
-		if (pid_default == 0) {
+void defaultExec (char array[], int num, int bg) {	
+		pid_default = fork();
+		if (pid_default > 0) {
+				if (bg) {
+						kill(pid_default, SIGCONT);
+				}
+				else {
+						if (signal(SIGINT, sig_int) == SIG_ERR) {
+								printf("signal(SIGINT) error");
+						}
+						if (signal(SIGTSTP, sig_tstp2) == SIG_ERR) {
+								printf("signal(SIGTSTP) error");
+						}
+						if (signal(SIGCONT, sig_cont) == SIG_ERR) {
+								printf("signal(SIGCONT) error");
+						}
+						int count = 0;
+						while (count < 1) {
+								pid = waitpid(-1, &status, WUNTRACED | WCONTINUED);
+								if (pid == -1) {
+										perror("waitpid");
+										exit(EXIT_FAILURE);
+								}
+								if (WIFEXITED(status)) {
+										count++;
+								} else if (WIFSIGNALED(status)) {
+										count++;
+								} else if (WIFSTOPPED(status)) {
+										push(pid_default);
+										return;
+								} else if (WIFCONTINUED(status)) {
+								}
+						}
+				}
+		}
+		else {
+				// child
 				char *argvdefault[num];
 				createArgv(array, argvdefault, num, 0);
 				execvp(argvdefault[0], argvdefault);
 		}
+}
+
+void foregroundJob() {
+		FILE *fp;
+		int fd, job;
+
+		fp = fopen("/dev/tty", "r");
+		fd = fileno(fp);
+		job = pop();
+		tcsetpgrp(fd, job);
+		if (kill(-job, SIGCONT) < 0) {
+				perror("kill (SIGCONT)");
+		}	
+		int count = 0;
+		while (count < 2) {
+				pid = waitpid(-1, &status, WUNTRACED | WCONTINUED);
+				if (pid == -1) {
+						perror("waitpid");
+						exit(EXIT_FAILURE);
+				}
+				if (WIFEXITED(status)) {
+						count++;
+				} else if (WIFSIGNALED(status)) {
+						count++;
+				} else if (WIFSTOPPED(status)) {
+						push(pid_ch1);
+						return;
+				} else if (WIFCONTINUED(status)) {
+				}
+		}
+		tcsetpgrp(fd, pid_shell);
+}
+
+void backgroundJob() {
+		int pid_bg, fd;
+		FILE *fp;
+		fp = fopen("/dev/tty", "r");
+		fd = fileno(fp);
+		pid_bg = peek();
+		tcsetpgrp(fd, pid_shell);
+		if (kill(pid_bg, SIGCONT) < 0) {
+				perror("kill (SIGCONT)");
+		}	
+		tcsetpgrp(fd, pid_shell);
+		return;	
+}
+
+int isEmpty() {
+		if (top == -1) {
+				return 1;
+		}
 		else {
-				// parent
-				wait(NULL);
+				return 0;
+		}
+}
+
+int isFull() {
+		if (top == STACK_SIZE) {
+				return 1;
+		}
+		else {
+				return 0;
+		}
+}
+
+int peek() {
+		return stack[top];
+}
+
+int pop() {
+		int data;
+		if (!isEmpty()) {
+				data = stack[top];
+				top = top - 1;
+				return data;
+		}
+		else {
+				// stack is empty
+		}
+}
+
+int push(int data) {
+		if (!isFull()) {
+				top = top + 1;
+				stack[top] = data;
+		}
+		else {
+				// stack is full;
 		}
 }
